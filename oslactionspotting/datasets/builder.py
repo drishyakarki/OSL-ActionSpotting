@@ -13,7 +13,7 @@ from .soccernet import (
 
 from .json import FeatureClipChunksfromJson, FeatureClipsfromJSON
 import torch
-
+import numpy as np
 import random
 
 def build_dataset(cfg, gpu=None, default_args=None):
@@ -183,30 +183,32 @@ def build_dataset(cfg, gpu=None, default_args=None):
     return dataset
 
 
-def build_dataloader(dataset, cfg, gpu, dali):
-    """Build a dataloader from config dict.
-
-    Args:
-        cfg (dict): Config dict. It should at least contain the key "type".
-        default_args (dict | None, optional): Default initialization arguments.
-            Default: None.
-
-    Returns:
-        Dataloader: The constructed dataloader.
-    """
-    def worker_init_fn(id):
-        random.seed(id + 100 * 100)
+def build_dataloader(dataset, cfg, gpu, dali, generator=None, worker_init_fn=None):
+    """Build a dataloader from config dict."""
     if dali:
         return dataset
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=cfg.batch_size,
-        shuffle=cfg.shuffle,
-        num_workers=cfg.num_workers if gpu >= 0 else 0,
-        pin_memory=cfg.pin_memory if gpu >= 0 else False,
-        prefetch_factor=(
-            cfg.prefetch_factor if "prefetch_factor" in cfg.keys() else None
-        ),
-        worker_init_fn=worker_init_fn
-    )
-    return dataloader
+    
+    # Use provided worker_init_fn or create a proper default one
+    if worker_init_fn is None:
+        def worker_init_fn(worker_id):
+            worker_seed = torch.initial_seed() % 2**32
+            np.random.seed(worker_seed)
+            random.seed(worker_seed)
+    
+    dataloader_kwargs = {
+        'dataset': dataset,
+        'batch_size': cfg.batch_size,
+        'shuffle': cfg.shuffle,
+        'num_workers': cfg.num_workers if gpu >= 0 else 0,
+        'pin_memory': cfg.pin_memory if gpu >= 0 else False,
+        'worker_init_fn': worker_init_fn
+    }
+    
+    # Add generator if provided (for reproducibility)
+    if generator is not None:
+        dataloader_kwargs['generator'] = generator
+    
+    if 'prefetch_factor' in cfg:
+        dataloader_kwargs['prefetch_factor'] = cfg.prefetch_factor
+    
+    return torch.utils.data.DataLoader(**dataloader_kwargs)

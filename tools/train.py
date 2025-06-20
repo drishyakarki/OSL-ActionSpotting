@@ -65,15 +65,20 @@ class TrainingManager:
         
         # Build dataloaders with worker initialization
         self.logger.info("Building dataloaders...")
-        train_loader = self._build_dataloader(
-            dataset_train, 
+        train_loader = build_dataloader(
+            dataset_train,
             self.cfg.dataset.train.dataloader,
-            generator
+            self.cfg.training.GPU,
+            getattr(self.cfg, "dali", False),
+            generator=generator # Pass the generator for reproducibility
         )
-        valid_loader = self._build_dataloader(
+        
+        valid_loader = build_dataloader(
             dataset_valid,
             self.cfg.dataset.valid.dataloader,
-            generator
+            self.cfg.training.GPU,
+            getattr(self.cfg, "dali", False),
+            generator=generator 
         )
         
         # Build trainer
@@ -91,24 +96,6 @@ class TrainingManager:
             'valid_loader': valid_loader,
             'trainer': trainer
         }
-    
-    def _build_dataloader(self, dataset, dataloader_cfg, generator):
-        """Build dataloader with proper worker initialization."""
-        def worker_init_fn(worker_id):
-            worker_seed = torch.initial_seed() % 2**32
-            np.random.seed(worker_seed)
-            random.seed(worker_seed)
-        
-        # Add worker_init_fn to dataloader config
-        dataloader_cfg['worker_init_fn'] = worker_init_fn
-        dataloader_cfg['generator'] = generator
-        
-        return build_dataloader(
-            dataset,
-            dataloader_cfg,
-            self.cfg.training.GPU,
-            getattr(self.cfg, "dali", False),
-        )
     
     def run(self):
         """Execute the complete training pipeline."""
