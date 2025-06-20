@@ -1,15 +1,13 @@
-import os
 import sys
 import logging
 import signal
-import time
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import timedelta
 import random
+import time
 
 import numpy as np
 import torch
-from mmengine.config import Config, DictAction
+from mmengine.config import DictAction
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from oslactionspotting.core.trainer import build_trainer
@@ -19,16 +17,19 @@ from oslactionspotting.core.utils.default_args import (
     get_default_args_train,
     get_default_args_trainer,
 )
-from oslactionspotting.core.utils.io import check_config
 from oslactionspotting.datasets.builder import build_dataloader, build_dataset
 from oslactionspotting.models.builder import build_model
-
+from oslactionspotting.core.utils.setup_environment import (
+    seed_everything,
+    log_environment_info,
+    load_config,
+    setup_workspace,
+    setup_logging,
+    setup_signal_handlers,
+)
 
 # Constants
 DEFAULT_SEED = 42
-LOG_FORMAT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-
 
 class TrainingManager:
     """Manages the training pipeline with proper initialization and cleanup."""
@@ -38,87 +39,6 @@ class TrainingManager:
         self.cfg = None
         self.start_time = time.time()
         self.logger = logging.getLogger(__name__)
-        
-    def seed_everything(self, seed):
-        """Ensure full reproducibility across all randomness sources."""
-        # Environment variables for hash reproducibility
-        os.environ['PYTHONHASHSEED'] = str(seed)
-        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-        
-        # Seed all random number generators
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        
-        # Configure PyTorch for deterministic behavior
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        torch.use_deterministic_algorithms(True, warn_only=True)
-        
-        # Create generator for DataLoader workers
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-        
-        self.logger.info(f"Reproducibility setup complete with seed: {seed}")
-        
-        return generator
-    
-    def _log_environment_info(self):
-        """Log system and package information for reproducibility."""
-        self.logger.info(f"Python version: {sys.version}")
-        self.logger.info(f"PyTorch version: {torch.__version__}")
-        self.logger.info(f"CUDA available: {torch.cuda.is_available()}")
-        
-        if torch.cuda.is_available():
-            self.logger.info(f"CUDA version: {torch.version.cuda}")
-            self.logger.info(f"CUDNN version: {torch.backends.cudnn.version()}")
-            self.logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-    
-    def setup_workspace(self):
-        """Create and configure the working directory."""
-        work_dir = Path(self.cfg.work_dir)
-        work_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create subdirectories
-        (work_dir / "logs").mkdir(exist_ok=True)
-        (work_dir / "checkpoints").mkdir(exist_ok=True)
-        
-        # Save configuration
-        config_path = work_dir / "config.py"
-        self.cfg.dump(str(config_path))
-        self.logger.info(f"Configuration saved to: {config_path}")
-        
-    def setup_logging(self):
-        """Configure logging with file and console handlers."""
-        log_dir = Path(self.cfg.work_dir) / "logs"
-        log_file = log_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        
-        # Configure root logger
-        logging.basicConfig(
-            level=getattr(logging, self.cfg.log_level.upper()),
-            format=LOG_FORMAT,
-            datefmt=DATE_FORMAT,
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler(sys.stdout)
-            ]
-        )
-        
-        # Adjust third-party loggers
-        logging.getLogger("mmengine").setLevel(logging.WARNING)
-        
-    def load_config(self):
-        """Load and validate configuration."""
-        self.cfg = Config.fromfile(self.args.config)
-        
-        # Override with command-line options
-        if self.args.cfg_options:
-            self.cfg.merge_from_dict(self.args.cfg_options)
-            
-        # Validate configuration
-        check_config(self.cfg)
         
     def build_components(self, generator):
         """Build model, datasets, and dataloaders."""
@@ -194,15 +114,15 @@ class TrainingManager:
         """Execute the complete training pipeline."""
         try:
             # Setup
-            self.load_config()
-            generator = self.seed_everything(self.args.seed)
-            self.setup_workspace()
-            self.setup_logging()
+            self.cfg = load_config(self.args)
+            generator = seed_everything(self.args.seed, mode="train")
+            setup_workspace(self.cfg)
+            setup_logging(self.cfg)
             
             self.logger.info("="*60)
             self.logger.info("Training Environment Information")
             self.logger.info("="*60)
-            self._log_environment_info()
+            log_environment_info()
             self.logger.info("="*60)
             
             # Build components
@@ -267,17 +187,6 @@ def parse_args():
     )
     
     return parser.parse_args()
-
-
-def setup_signal_handlers():
-    """Setup signal handlers for graceful shutdown."""
-    def signal_handler(signum, frame):
-        logging.warning(f"Received signal {signum}, shutting down gracefully...")
-        sys.exit(1)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
 
 def main():
     """Main entry point."""
