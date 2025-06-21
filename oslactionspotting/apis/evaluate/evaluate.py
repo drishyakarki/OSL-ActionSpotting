@@ -50,7 +50,9 @@ class Evaluator:
 def evaluate_common_JSON(cfg, results, metric):
     if cfg.path == None:
         return
-    with open(cfg.path) as f:
+    
+    path = cfg.path[0] if isinstance(cfg.path, list) else cfg.path
+    with open(path) as f:
         GT_data = json.load(f)
 
     pred_path_is_json = False
